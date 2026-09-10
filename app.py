@@ -16,6 +16,13 @@ st.markdown("""<style>
 def secret(name):
     try:return st.secrets.get(name,"")
     except Exception:return ""
+
+# Streamlit secrets are not environment variables; expose only the LangSmith
+# runtime configuration expected by the SDK. Participant keys never enter here.
+for _name in ("LANGSMITH_API_KEY","LANGSMITH_PROJECT","LANGSMITH_TRACING","LANGSMITH_HIDE_METADATA"):
+    _value=secret(_name)
+    if _value not in ("",None) and not os.getenv(_name):os.environ[_name]=str(_value).lower() if isinstance(_value,bool) else str(_value)
+
 def init():
     defaults={"access":False,"page":"Situation Room","state":None,"fault":"none","scenario":{"demand":72,"slots":48,"prior":54,"roster_age":0,"claimed_confidence":86,"priority":"Fastest operational relief","control_mode":"Strict fail-closed"},"profile":{"name":"","department":"Clinic Operations","role":"Clinic / Operations","success_kpi":"≥95% evidence completeness and 100% safe-stop compliance","next_action":"Confirm source owners and rehearse one fault test with the accountable leader."},"config":role_config("Clinic / Operations"),"api_key":"","provider":"OpenAI","model":"gpt-5.5","connection":None,"live_brief":"","last_active":time.time(),"thread_id":str(uuid.uuid4())}
     for k,v in defaults.items():st.session_state.setdefault(k,v)
