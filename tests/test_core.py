@@ -1,7 +1,8 @@
 import io
 import pytest
 from pypdf import PdfReader
-from core import ROLE_DEFAULTS, access_allowed, build_blueprint, calculate_metrics, redact, role_config, run_workflow, workflow_map
+from core import ROLE_DEFAULTS, access_allowed, build_blueprint, calculate_metrics, deterministic_brief, redact, role_config, run_workflow, workflow_map
+from llm_service import PROVIDER_MODELS, manager_prompt
 
 def test_calculations():
     assert calculate_metrics(72,48,54)=={"pressure_ratio":1.5,"waitlist_change_pct":33.3,"capacity_gap":24}
@@ -29,3 +30,15 @@ def test_pdf_changes_with_inputs():
     assert a!=b
     text="".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(b)).pages)
     assert "Jordan Example" in text and "Training artifact based on synthetic data" in text and "Ready" in text
+
+def test_decision_grade_brief_is_grounded():
+    s=run_workflow(approval="approve"); brief=deterministic_brief(s)
+    for section in ("Executive signal","Verified facts","Two bounded options","Trade-offs","Decision requested","Assumptions to validate","Controls and stop conditions"):
+        assert section in brief
+    assert "72" in brief and "48" in brief and "No appointment changes" in brief
+
+def test_all_provider_catalogs_and_safe_prompt():
+    assert set(PROVIDER_MODELS)=={"OpenAI","Google Gemini","Anthropic","xAI Grok"}
+    assert all(len(models)>=5 for models in PROVIDER_MODELS.values())
+    prompt=manager_prompt(run_workflow(approval="approve"))
+    assert "API" not in prompt and "72 urgent requests" in prompt and "Do not change appointments" in prompt

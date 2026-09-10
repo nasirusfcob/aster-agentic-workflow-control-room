@@ -1,132 +1,123 @@
 from __future__ import annotations
-
-import os
-import time
+import os,time,uuid
 import streamlit as st
-from core import FAULT_LABELS, NODES, ROLE_DEFAULTS, access_allowed, build_blueprint, role_config, run_workflow, workflow_map
+from core import FAULT_LABELS,NODES,ROLE_DEFAULTS,access_allowed,build_blueprint,deterministic_brief,role_config,run_workflow,workflow_map
+from llm_service import PROVIDER_MODELS,call_llm,manager_prompt,test_connection
 
-st.set_page_config(page_title="Aster Agentic Workflow Control Room", page_icon="◎", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Aster Agentic Workflow Control Room",page_icon="✦",layout="wide",initial_sidebar_state="expanded")
 st.markdown("""<style>
-:root{--navy:#102A43;--teal:#087F8C;--blue:#276FBF;--amber:#D99000;--coral:#D1495B;--paper:#F7F3EA}
-.stApp{background:var(--paper);color:var(--navy)} [data-testid="stSidebar"]{background:#102A43;color:white}
-[data-testid="stSidebar"] *{color:white}.hero{padding:2.2rem;border-radius:22px;background:linear-gradient(125deg,#102A43,#174D5E);color:white;margin-bottom:1rem;box-shadow:0 12px 35px #102a4322}.eyebrow{letter-spacing:.14em;text-transform:uppercase;color:#84DCC6;font-weight:700;font-size:.75rem}.hero h1{font-size:3rem;line-height:1.02;margin:.5rem 0}.hero p{font-size:1.05rem;color:#E5EEF2;max-width:760px}.card{background:white;border:1px solid #DDE7EB;border-radius:16px;padding:1rem 1.1rem;height:100%;box-shadow:0 4px 18px #102a430d}.node{padding:.75rem;border-radius:12px;border-left:6px solid #A8B8C2;background:white;margin:.38rem 0}.passed,.approved{border-color:#087F8C}.blocked{border-color:#D1495B}.escalated,.waiting{border-color:#D99000}.tag{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;font-weight:800}.fine{font-size:.78rem;color:#526D82}.bigmetric{font-size:2rem;font-weight:800;color:#102A43}.mapstep{background:white;border-top:4px solid #276FBF;border-radius:12px;padding:.8rem;min-height:125px}.stButton>button,.stDownloadButton>button{border-radius:10px;font-weight:700}.notice{padding:.8rem 1rem;background:#E8F3F4;border-radius:10px;border-left:4px solid #087F8C}
-</style>""", unsafe_allow_html=True)
-
-def init():
-    defaults={"access":False,"page":"Mission Control","state":None,"fault":"none","profile":{"name":"","department":"Clinic Operations","role":"Clinic / Operations","success_kpi":"≥95% evidence completeness and 100% safe-stop compliance","next_action":"Confirm source owners and rehearse one fault test with the accountable leader."},"config":role_config("Clinic / Operations"),"api_key":"","last_active":time.time()}
-    for k,v in defaults.items(): st.session_state.setdefault(k,v)
-init()
-if time.time()-st.session_state.last_active>1800: st.session_state.api_key=""
-st.session_state.last_active=time.time()
+:root{--ink:#071A2B;--teal:#007C78;--blue:#075EA8;--gold:#9B6400;--red:#B42318;--muted:#40566B;--line:#CBD7E1}
+.stApp{background:linear-gradient(180deg,#EDF4F7 0,#F8FAFB 460px);color:var(--ink)}[data-testid="stSidebar"]{background:#071A2B;border-right:1px solid #153B55}[data-testid="stSidebar"] *{color:#F7FBFC!important}p,li,label,.stMarkdown{color:var(--ink)}
+.hero{padding:2.7rem 3rem;border-radius:24px;background:radial-gradient(circle at 92% 12%,#0E7490 0,transparent 28%),linear-gradient(130deg,#061827,#0A3146 72%);color:#FFF;margin-bottom:1.2rem;box-shadow:0 18px 45px #071a2b33;border:1px solid #29556A}.hero h1{font-size:clamp(2.5rem,4.5vw,4.5rem);line-height:.98;margin:.55rem 0 1rem;color:#FFF;letter-spacing:-.045em}.hero p{font-size:1.08rem;color:#E8F5F5!important;max-width:820px;line-height:1.6}.eyebrow{letter-spacing:.15em;text-transform:uppercase;color:#7DE2D1!important;font-weight:800;font-size:.76rem}
+.card{background:#FFF;border:1px solid #C9D6DF;border-radius:17px;padding:1.25rem 1.35rem;height:100%;box-shadow:0 5px 22px #071a2b12}.card p{color:#31495D!important}.card h3{margin:.2rem 0;color:#071A2B}.kpi{font-size:2.15rem;font-weight:850;color:#071A2B;letter-spacing:-.04em}.label{font-size:.7rem;letter-spacing:.11em;text-transform:uppercase;font-weight:850;color:#075EA8!important}
+.node{padding:.9rem 1rem;border-radius:13px;border:1px solid #C9D6DF;border-left:7px solid #8194A3;background:#FFF;margin:.5rem 0;box-shadow:0 2px 8px #071a2b0d}.node.passed,.node.approved{border-left-color:#007C78}.node.blocked{border-left-color:#B42318;background:#FFF4F2}.node.escalated,.node.waiting{border-left-color:#9B6400;background:#FFFAEB}.status{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;font-weight:900}.fine{font-size:.84rem;color:#40566B!important}.mapstep{background:#FFF;border:1px solid #C9D6DF;border-left:5px solid #075EA8;border-radius:13px;padding:.9rem 1rem;margin:.55rem 0}.notice{padding:.85rem 1rem;background:#E3F4F2;color:#083D3B;border:1px solid #87CAC4;border-radius:11px;font-weight:650}.danger{padding:.85rem 1rem;background:#FFF0ED;color:#7A271A;border:1px solid #FDA29B;border-radius:11px}.brief{background:#FFF;border:1px solid #B7C7D3;border-radius:18px;padding:1.4rem 1.6rem;box-shadow:0 5px 20px #071a2b10}.stack{font-family:ui-monospace,monospace;background:#071A2B;color:#E7F6F4;padding:1rem;border-radius:12px;line-height:1.8}.stButton>button,.stDownloadButton>button{border-radius:10px;font-weight:750;min-height:2.8rem}.stMetric{background:white;border:1px solid #CBD7E1;padding:1rem;border-radius:13px}
+</style>""",unsafe_allow_html=True)
 
 def secret(name):
-    try: return st.secrets.get(name, "")
-    except FileNotFoundError: return ""
-    except Exception: return ""
-
+    try:return st.secrets.get(name,"")
+    except Exception:return ""
+def init():
+    defaults={"access":False,"page":"Situation Room","state":None,"fault":"none","profile":{"name":"","department":"Clinic Operations","role":"Clinic / Operations","success_kpi":"≥95% evidence completeness and 100% safe-stop compliance","next_action":"Confirm source owners and rehearse one fault test with the accountable leader."},"config":role_config("Clinic / Operations"),"api_key":"","provider":"OpenAI","model":"gpt-5.5","connection":None,"live_brief":"","last_active":time.time(),"thread_id":str(uuid.uuid4())}
+    for k,v in defaults.items():st.session_state.setdefault(k,v)
+init()
+if time.time()-st.session_state.last_active>1800:st.session_state.api_key="";st.session_state.connection=None
+st.session_state.last_active=time.time()
 expected=os.getenv("WORKSHOP_ACCESS_CODE","") or secret("WORKSHOP_ACCESS_CODE")
 if not st.session_state.access:
-    st.markdown('<div class="hero"><div class="eyebrow">Aster Healthcare • Manager Lab</div><h1>Agentic Workflow<br/>Control Room</h1><p>Configure → Run → Inspect → Challenge → Adapt</p></div>',unsafe_allow_html=True)
+    st.markdown('<div class="hero"><div class="eyebrow">Aster Healthcare • Applied AI Leadership Lab</div><h1>Agentic Workflow<br/>Control Room</h1><p>Operate a transparent healthcare workflow. Stress it. Stop it safely. Then redesign the pattern for a real managerial decision—without touching a patient, schedule, workforce action, or production system.</p></div>',unsafe_allow_html=True)
     code=st.text_input("Workshop access code",type="password")
-    if st.button("Enter control room",type="primary"):
-        if access_allowed(code,expected): st.session_state.access=True; st.rerun()
-        else: st.error("That workshop code is not valid. Check the code shown by your facilitator.")
-    st.caption("Workshop-entry gate only. This environment contains synthetic training data and no operational systems.")
-    st.stop()
+    if st.button("Enter the control room",type="primary",use_container_width=True):
+        if access_allowed(code,expected):st.session_state.access=True;st.rerun()
+        else:st.error("Access denied. Use the rotating code shown by your facilitator.")
+    st.caption("Synthetic training environment • Workshop gate, not a security boundary");st.stop()
 
-pages=["Mission Control","Run the Workflow","Inspect the Evidence","Challenge the Workflow","Make This Your Workflow","Download Your Blueprint"]
+pages=["Situation Room","Live Agent Run","Evidence & Math","Red-Team Lab","Role Design Studio","Blueprint"]
 with st.sidebar:
-    st.markdown("## ASTER / CONTROL ROOM")
-    st.caption("SYNTHETIC TRAINING ENVIRONMENT")
-    page=st.radio("Navigate",pages,index=pages.index(st.session_state.page),label_visibility="collapsed")
-    st.session_state.page=page
-    st.divider(); mode=st.selectbox("Experience mode",["Demo Mode","Participant BYOK Live Mode"])
-    if mode.startswith("Participant"):
-        st.selectbox("Provider",["OpenAI","Gemini","Anthropic","Grok"]); st.selectbox("Model",["Provider default","Fast","Balanced"])
+    st.markdown("## ✦ ASTER CONTROL ROOM");st.caption("OBSERVE • CHALLENGE • ADAPT")
+    page=st.radio("Workshop navigation",pages,index=pages.index(st.session_state.page),label_visibility="collapsed");st.session_state.page=page
+    st.divider();st.markdown("### Intelligence layer");mode=st.radio("Mode",["Deterministic Demo","Live BYOK"],horizontal=True)
+    if mode=="Live BYOK":
+        st.session_state.provider=st.selectbox("Provider",list(PROVIDER_MODELS),index=list(PROVIDER_MODELS).index(st.session_state.provider));models=PROVIDER_MODELS[st.session_state.provider]
+        if st.session_state.model not in models:st.session_state.model=models[0]
+        st.session_state.model=st.selectbox("Model",models,index=models.index(st.session_state.model));st.session_state.api_key=st.text_input("API key",type="password",value=st.session_state.api_key)
         st.markdown('<div class="notice">Your API key is used only for this active training session and is never saved.</div>',unsafe_allow_html=True)
-        st.session_state.api_key=st.text_input("API key",type="password",value=st.session_state.api_key)
-        if st.button("Reset and Remove My Key"): st.session_state.api_key=""; st.success("Key removed from this session.")
-    st.divider(); st.caption("Designed and facilitated by\nDr. Nasir Uddin, PhD | Duke MBA")
+        c1,c2=st.columns(2)
+        if c1.button("Test connection",use_container_width=True,disabled=not bool(st.session_state.api_key)):
+            with st.spinner("Calling selected model…"):st.session_state.connection=test_connection(st.session_state.provider,st.session_state.model,st.session_state.api_key)
+        if c2.button("Remove key",use_container_width=True):st.session_state.api_key="";st.session_state.connection=None;st.session_state.live_brief="";st.rerun()
+        if st.session_state.connection:
+            r=st.session_state.connection;(st.success if r.ok else st.error)(f'{"Connected" if r.ok else "Connection failed"} • {r.model} • {r.latency_ms} ms'+(f" • {r.error}" if r.error else ""))
+    st.divider();st.caption("Designed and facilitated by\nDr. Nasir Uddin, PhD | Duke MBA")
 
-def hero(kicker,title,copy): st.markdown(f'<div class="hero"><div class="eyebrow">{kicker}</div><h1>{title}</h1><p>{copy}</p></div>',unsafe_allow_html=True)
-def go(name): st.session_state.page=name; st.rerun()
+def hero(k,t,c):st.markdown(f'<div class="hero"><div class="eyebrow">{k}</div><h1>{t}</h1><p>{c}</p></div>',unsafe_allow_html=True)
+def go(p):st.session_state.page=p;st.rerun()
 
-if page=="Mission Control":
-    hero("08:40 AM • ACCESS-PRESSURE INCIDENT","Your agent is standing by.","The next-seven-day urgent access waitlist has increased sharply. Determine whether a same-week operational intervention should be prepared for leadership review.")
-    a,b,c=st.columns(3)
-    a.markdown('<div class="card"><div class="tag">Your authority</div><div class="bigmetric">Prepare</div><p>A simulated leadership packet—not an operational action.</p></div>',unsafe_allow_html=True)
-    b.markdown('<div class="card"><div class="tag">Hard boundary</div><div class="bigmetric">No action</div><p>No appointments, patient contact, staffing changes, or production connections.</p></div>',unsafe_allow_html=True)
-    c.markdown('<div class="card"><div class="tag">Your mission</div><div class="bigmetric">See control</div><p>Operate, challenge, inspect, and adapt an observable workflow.</p></div>',unsafe_allow_html=True)
-    st.write("");
-    if st.button("Launch the Workflow X-Ray →",type="primary",use_container_width=True): st.session_state.state=run_workflow(); go("Run the Workflow")
-
-elif page=="Run the Workflow":
-    hero("LIVE WORKFLOW X-RAY","Watch the work. Inspect the proof.","Every node has one accountable responsibility. Select a node to inspect what it received, produced, and why the workflow may proceed.")
-    if st.session_state.state is None: st.session_state.state=run_workflow()
-    s=st.session_state.state; left,right=st.columns([1.15,1])
+if page=="Situation Room":
+    hero("08:40 AM • SYNTHETIC ACCESS SIGNAL","The pressure is real. The authority is bounded.","Urgent seven-day demand has moved from 54 to 72 requests while verified staffed capacity is 48 slots. Your task is not to ‘let AI decide.’ Your task is to determine whether a leadership option packet is reliable enough to prepare.")
+    a,b,c,d=st.columns(4)
+    for col,label,value,copy in [(a,"DEMAND","72","urgent requests"),(b,"VERIFIED CAPACITY","48","staffed slots"),(c,"PRESSURE","1.50×","requests per slot"),(d,"AUTHORITY","PREPARE","never execute")]:col.markdown(f'<div class="card"><div class="label">{label}</div><div class="kpi">{value}</div><p>{copy}</p></div>',unsafe_allow_html=True)
+    st.write("");st.markdown("### Your leadership challenge");st.markdown("A conventional assistant can draft plausible prose. A reliable agentic workflow must prove **what it saw, what it calculated, what control it applied, why it stopped, and who authorized continuation**.")
+    if st.button("Start the 8:40 incident →",type="primary",use_container_width=True):st.session_state.state=run_workflow();st.session_state.live_brief="";go("Live Agent Run")
+elif page=="Live Agent Run":
+    hero("LANGGRAPH EXECUTION • CHECKPOINTED SESSION","Follow the evidence—not the theater.","Each node owns a different contract. Inspect its input, operation, release condition, latency, and downstream consequence. The graph pauses at human approval.")
+    if st.session_state.state is None:st.session_state.state=run_workflow()
+    s=st.session_state.state;left,right=st.columns([1.05,1.25])
     with left:
-        selected=st.radio("Workflow nodes",[k for k,_ in NODES],format_func=lambda k:dict(NODES)[k],label_visibility="collapsed")
-        for k,label in NODES:
-            status=s.statuses[k]; st.markdown(f'<div class="node {status}"><span class="tag">{status}</span><br/><b>{label}</b></div>',unsafe_allow_html=True)
+        selected=st.radio("Inspect node",[k for k,_ in NODES],format_func=lambda k:dict(NODES)[k],label_visibility="collapsed")
+        for idx,(k,label) in enumerate(NODES):
+            status=s.statuses[k];detail=next((e["detail"] for e in s.trace if e["node"]==k),"Waiting for released state");connector="↓" if idx<len(NODES)-1 else ""
+            st.markdown(f'<div class="node {status}"><span class="status">{status}</span><br/><b>{label}</b><br/><span class="fine">{detail}</span></div><div style="text-align:center;color:#547184">{connector}</div>',unsafe_allow_html=True)
     with right:
-        event=next((x for x in s.trace if x["node"]==selected),None)
-        label=dict(NODES)[selected]; st.subheader(label)
+        event=next((e for e in s.trace if e["node"]==selected),None);st.subheader(dict(NODES)[selected]);responsibilities={"intake_scope":"Bounds the decision-support contract and denies operational actions.","retrieve_evidence":"Retrieves allowlisted synthetic sources with owner, scope, and freshness.","calculate_decision_metrics":"Runs reproducible Python math; the LLM never calculates KPIs.","validate_evidence":"Tests ownership, freshness, scope alignment, and consistency.","risk_policy_review":"Evaluates prohibited actions, approved tools, and control availability.","supervisor_quality_gate":"Challenges confidence, conflicts, and option-to-evidence alignment.","human_approval_interrupt":"Persists state and blocks packet generation until a manager decides.","generate_decision_packet":"Turns verified state into managerial language without adding facts or acting."}
+        st.markdown(f'<div class="card"><div class="label">NODE CONTRACT</div><h3>{responsibilities[selected]}</h3></div>',unsafe_allow_html=True)
         if event:
-            st.status(event["detail"],state="error" if event["status"]=="blocked" else "complete" if event["status"] in ("passed","approved") else "running")
-            m1,m2=st.columns(2); m1.metric("Elapsed",f'{event["latency_ms"]} ms'); m2.metric("Est. model cost",f'${event["estimated_cost_usd"]:.4f}')
-            st.markdown(f'**Verified output**  \n{event["detail"]}'); st.markdown(f'**Why next may proceed**  \n{"Control passed; next node may receive the verified output." if event["status"] in ("passed","approved") else "The workflow cannot advance until this state is resolved."}')
-        else: st.info("Waiting. No input has been released to this node.")
-    st.divider(); st.markdown(f'**Current recommendation:** {s.recommendation}'); st.markdown(f'**Risk state:** `{s.risk}`')
+            m1,m2,m3=st.columns(3);m1.metric("State",event["status"].upper());m2.metric("Latency",f'{event["latency_ms"]} ms');m3.metric("Est. cost",f'${event["estimated_cost_usd"]:.4f}');st.markdown("**Released output**");st.info(event["detail"]);st.markdown("**Release rule**");st.write("Advance only after pass or accountable approval." if event["status"] in ("passed","approved") else "Downstream state is locked; no silent continuation.")
+        else:st.warning("No state arrived because an upstream control stopped the graph.")
+        st.markdown('<div class="stack">StateGraph → typed shared state<br/>MemorySaver → session checkpoint<br/>Python tools → KPI + evidence + policy<br/>LangSmith → safe traces when configured<br/>Human gate → required before packet</div>',unsafe_allow_html=True)
+    st.divider();c1,c2=st.columns([1,2]);c1.metric("Current risk",s.risk);c2.markdown(f"**Bounded recommendation**  \n{s.recommendation}")
     if s.statuses["human_approval_interrupt"]=="waiting":
-        c1,c2,c3=st.columns(3)
-        if c1.button("Approve simulated preparation",type="primary",use_container_width=True): st.session_state.state=run_workflow(s.fault,"approve");st.rerun()
-        if c2.button("Request clarification",use_container_width=True): st.session_state.state=run_workflow(s.fault,"clarify");st.rerun()
-        if c3.button("Reject",use_container_width=True): st.session_state.state=run_workflow(s.fault,"reject");st.rerun()
-
-elif page=="Inspect the Evidence":
-    hero("EVIDENCE ROOM","Trust is inspectable.","Review source ownership, freshness, deterministic math, and the exact trace—not hidden reasoning.")
-    s=st.session_state.state or run_workflow(); st.dataframe(s.evidence,use_container_width=True,hide_index=True)
-    cols=st.columns(3)
-    cols[0].metric("Access pressure",f'{s.metrics["pressure_ratio"]:.2f}×',"72 requests / 48 slots")
-    cols[1].metric("Demand change",f'{s.metrics["waitlist_change_pct"]:.1f}%','vs. prior 54')
-    cols[2].metric("Capacity gap",f'{s.metrics["capacity_gap"]} requests')
-    st.subheader("Observable execution trace"); st.dataframe(s.trace,use_container_width=True,hide_index=True)
-
-elif page=="Challenge the Workflow":
-    hero("FAULT-INJECTION LAB","Make it fail—safely.","A reliable agent does not improvise around missing controls. Inject one fault and observe where the path changes.")
-    fault=st.selectbox("Select a controlled fault",list(FAULT_LABELS),format_func=lambda x:FAULT_LABELS[x],index=list(FAULT_LABELS).index(st.session_state.fault))
-    if st.button("Inject fault & run",type="primary"):
-        st.session_state.fault=fault; st.session_state.state=run_workflow(fault); st.rerun()
-    s=st.session_state.state or run_workflow(fault); st.markdown(f'### Outcome: `{s.risk}`')
-    for e in s.trace: st.markdown(f'<div class="node {e["status"]}"><b>{dict(NODES)[e["node"]]}</b> · {e["status"]}<br/><span class="fine">{e["detail"]}</span></div>',unsafe_allow_html=True)
-    st.info("Safe stop means no packet and no hidden continuation. Resolve the evidence or control issue, then run again.")
-
-elif page=="Make This Your Workflow":
-    hero("ROLE ADAPTATION STUDIO","Turn the pattern into your pilot.","Configure a safe business workflow in plain language. Your map and blueprint update as you type.")
-    role=st.selectbox("Role pack",list(ROLE_DEFAULTS),index=list(ROLE_DEFAULTS).index(st.session_state.profile["role"]))
-    if role!=st.session_state.profile["role"]: st.session_state.profile["role"]=role;st.session_state.profile["department"]=role;st.session_state.config=role_config(role);st.rerun()
-    labels=[("trigger","1. My operational trigger"),("decision","2. My decision to support"),("evidence_1","3a. Approved evidence source one"),("evidence_2","3b. Approved evidence source two"),("kpi","4. Deterministic KPI / calculation"),("control","5. Non-negotiable control or policy rule"),("approver","6. Human approver"),("prohibited","7. Prohibited action"),("pilot","8. First 30-day pilot outcome")]
-    left,right=st.columns([1,1.15])
+        st.warning("DECISION CHECKPOINT — authorize packet preparation only, never an intervention.");x,y,z=st.columns(3)
+        if x.button("Approve packet preparation",type="primary",use_container_width=True):st.session_state.state=run_workflow(s.fault,"approve");st.session_state.live_brief="";st.rerun()
+        if y.button("Request evidence clarification",use_container_width=True):st.session_state.state=run_workflow(s.fault,"clarify");st.rerun()
+        if z.button("Reject and close",use_container_width=True):st.session_state.state=run_workflow(s.fault,"reject");st.rerun()
+    if s.packet:
+        st.subheader("Decision-grade leadership brief")
+        if mode=="Live BYOK" and st.session_state.connection and st.session_state.connection.ok:
+            if st.button(f"Generate with {st.session_state.model}",type="primary"):
+                with st.spinner("Grounding language in verified state…"):result=call_llm(st.session_state.provider,st.session_state.model,st.session_state.api_key,manager_prompt(s));st.session_state.live_brief=result.text if result.ok else "";st.session_state.connection=result
+                if not result.ok:st.error(f"Live call failed safely: {result.error}. Deterministic brief preserved.")
+        st.markdown(st.session_state.live_brief or deterministic_brief(s))
+elif page=="Evidence & Math":
+    hero("EVIDENCE LEDGER • REPRODUCIBLE TOOLS","Every number has a lineage.","Challenge the source, reproduce the math, and inspect the policy result without asking a model for private reasoning.")
+    s=st.session_state.state or run_workflow();st.dataframe(s.evidence,use_container_width=True,hide_index=True);a,b,c=st.columns(3);a.metric("Access pressure",f'{s.metrics["pressure_ratio"]:.2f}×',"72 ÷ 48");b.metric("Demand movement",f'{s.metrics["waitlist_change_pct"]:.1f}%','(72 − 54) ÷ 54');c.metric("Capacity gap",s.metrics["capacity_gap"],"max(72 − 48, 0)")
+    t1,t2=st.tabs(["Execution trace","Exact LLM context"]);t1.dataframe(s.trace,use_container_width=True,hide_index=True);t2.code(manager_prompt(s),language="text");t2.caption("Keys, identity, and hidden reasoning are excluded. Only verified synthetic state is released.")
+elif page=="Red-Team Lab":
+    hero("CONTROLLED FAILURE • SEVEN DISTINCT PATHS","Reliability becomes visible when something breaks.","Predict the stop point, inject a fault, and compare your expectation with the actual control response.")
+    outcomes={"stale_roster":"Evidence Validation blocks → request current roster","conflicting_reports":"Supervisor escalates → reconcile 72 vs 51","missing_owner":"Evidence Validation blocks → assign owner","unapproved_tool":"Policy Agent denies tool → record attempt","risk_timeout":"Policy Agent fails closed → no continuation","high_confidence":"Supervisor recalibrates 98% → 58%","bypass_approval":"Human gate rejects bypass → approval stays mandatory","none":"Baseline pauses at human review"}
+    fault=st.selectbox("Fault to inject",list(FAULT_LABELS),format_func=lambda x:FAULT_LABELS[x],index=list(FAULT_LABELS).index(st.session_state.fault));st.markdown(f'<div class="card"><div class="label">EXPECTED CONTROL RESPONSE</div><h3>{outcomes[fault]}</h3></div>',unsafe_allow_html=True)
+    if st.button("Run adversarial test",type="primary",use_container_width=True):st.session_state.fault=fault;st.session_state.state=run_workflow(fault);st.session_state.live_brief="";st.rerun()
+    s=st.session_state.state or run_workflow(fault);st.markdown(f"## Result: `{s.risk}`")
+    for e in s.trace:st.markdown(f'<div class="node {e["status"]}"><span class="status">{e["status"]}</span> · <b>{dict(NODES)[e["node"]]}</b><br/><span class="fine">{e["detail"]}</span></div>',unsafe_allow_html=True)
+    if not s.packet:st.markdown('<div class="danger"><b>No packet. No tool call. No hidden continuation.</b><br/>The absence of output is correct when a required control fails.</div>',unsafe_allow_html=True)
+elif page=="Role Design Studio":
+    hero("NO-CODE WORKFLOW DESIGN","Convert a management problem into an auditable graph.","Define the decision boundary before choosing a model. Every edit becomes part of your pilot specification.")
+    role=st.selectbox("Start from a role pack",list(ROLE_DEFAULTS),index=list(ROLE_DEFAULTS).index(st.session_state.profile["role"]))
+    if role!=st.session_state.profile["role"]:st.session_state.profile["role"]=role;st.session_state.profile["department"]=role;st.session_state.config=role_config(role);st.rerun()
+    labels=[("trigger","1 · Trigger"),("decision","2 · Decision support"),("evidence_1","3 · Approved evidence A"),("evidence_2","4 · Approved evidence B"),("kpi","5 · Deterministic calculation"),("control","6 · Non-negotiable control"),("approver","7 · Human approver"),("prohibited","8 · Prohibited action"),("pilot","9 · 30-day learning outcome")];left,right=st.columns([1.05,1])
     with left:
-        for k,label in labels: st.session_state.config[k]=st.text_input(label,value=st.session_state.config[k],key=f"cfg_{role}_{k}")
+        for k,label in labels:st.session_state.config[k]=st.text_area(label,value=st.session_state.config[k],height=72,key=f"cfg_{role}_{k}")
     with right:
-        st.subheader("Your live workflow map")
-        for i,x in enumerate(workflow_map(st.session_state.config)): st.markdown(f'<div class="mapstep"><div class="tag">0{i+1} · {x["stage"]}</div><p>{x["value"]}</p></div>',unsafe_allow_html=True)
+        st.subheader("Live workflow specification")
+        for i,x in enumerate(workflow_map(st.session_state.config)):st.markdown(f'<div class="mapstep"><span class="label">NODE {i+1} · {x["stage"]}</span><br/><b>{x["value"]}</b></div>',unsafe_allow_html=True)
+        completeness=sum(bool(v.strip()) for v in st.session_state.config.values())/len(st.session_state.config);st.progress(completeness,text=f"Control design completeness: {completeness:.0%}");st.markdown(f'<div class="danger"><b>Never:</b> {st.session_state.config["prohibited"]}</div>',unsafe_allow_html=True)
+elif page=="Blueprint":
+    hero("AGENT RELIABILITY BLUEPRINT","Leave with an operating hypothesis.","Capture the decision contract, evidence, tool, control, authority, adversarial test, success measure, and next move.")
+    p=st.session_state.profile;a,b=st.columns(2);p["name"]=a.text_input("Participant name",p["name"]);p["department"]=b.text_input("Department",p["department"]);p["success_kpi"]=st.text_input("Pilot success KPI",p["success_kpi"]);p["next_action"]=st.text_input("Next-week action",p["next_action"])
+    s=st.session_state.state or run_workflow(st.session_state.fault);outcome=s.trace[-1]["detail"] if s.trace else "Not tested";pdf=build_blueprint(p,st.session_state.config,st.session_state.fault,outcome);c1,c2,c3=st.columns(3);c1.metric("Role pack",p["role"]);c2.metric("Fault tested",FAULT_LABELS[st.session_state.fault]);c3.metric("Graph state",s.risk)
+    st.download_button("Download my 2-page reliability blueprint",pdf,"aster-agent-reliability-blueprint.pdf","application/pdf",type="primary",use_container_width=True);st.caption("Generated in memory. Inputs and PDFs are not retained after the session.")
 
-elif page=="Download Your Blueprint":
-    hero("TAKE-HOME BLUEPRINT","Leave with a testable pilot—not a promise.","Capture ownership, controls, observability, fault testing, and a next-week action in a personalized two-page artifact.")
-    p=st.session_state.profile
-    a,b=st.columns(2); p["name"]=a.text_input("Participant name",p["name"]);p["department"]=b.text_input("Department",p["department"])
-    p["success_kpi"]=st.text_input("Pilot success KPI",p["success_kpi"]);p["next_action"]=st.text_input("Next-week action",p["next_action"])
-    s=st.session_state.state or run_workflow(st.session_state.fault); outcome=s.trace[-1]["detail"] if s.trace else "Not yet tested"
-    pdf=build_blueprint(p,st.session_state.config,st.session_state.fault,outcome)
-    st.download_button("Download my Agent Reliability Blueprint (PDF)",pdf,"aster-agent-reliability-blueprint.pdf","application/pdf",type="primary",use_container_width=True)
-    st.success("Generated in memory for this browser session. The app does not retain your inputs or PDF.")
-
-# Hidden instructor entry
-with st.sidebar.expander("Facilitator access"):
-    pin=st.text_input("Instructor PIN",type="password")
-    expected_pin=os.getenv("INSTRUCTOR_PIN","") or secret("INSTRUCTOR_PIN")
+with st.sidebar.expander("Instructor reliability console"):
+    pin=st.text_input("Instructor PIN",type="password");expected_pin=os.getenv("INSTRUCTOR_PIN","") or secret("INSTRUCTOR_PIN")
     if expected_pin and access_allowed(pin,expected_pin):
-        st.toggle("Disable Live AI",value=True,key="disable_live");st.caption("Reliability console: session-local only")
-        if st.button("Return session to Demo"): st.session_state.api_key="";st.success("Demo Mode restored.")
+        st.success("Instructor controls unlocked");st.toggle("Disable live AI",value=False,key="disable_live");st.code(f"thread={st.session_state.thread_id}\nprovider={st.session_state.provider}\nmodel={st.session_state.model}\nkey=NEVER TRACED")
+        if st.button("Reset participant session"):st.session_state.api_key="";st.session_state.connection=None;st.session_state.live_brief="";st.session_state.state=None;st.session_state.fault="none";st.rerun()

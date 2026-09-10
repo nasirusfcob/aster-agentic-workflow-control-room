@@ -4,3 +4,4 @@ langsmith==0.4.21
 reportlab==4.4.3
 pypdf==6.0.0
 pytest==8.4.2
+httpx==0.28.1

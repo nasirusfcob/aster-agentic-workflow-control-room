@@ -118,6 +118,42 @@ class WorkflowState:
     packet: str = ""
 
 
+def deterministic_brief(s: WorkflowState) -> str:
+    """Decision-grade fallback used when no model is configured or a call fails."""
+    if not s.metrics:
+        return "### Executive signal\nNo recommendation can be prepared because required evidence did not clear validation.\n\n### Controls and stop conditions\nThe workflow stopped visibly. Resolve the named evidence or policy failure before rerun. No action was taken."
+    return f"""### Executive signal
+Urgent access pressure is materially above available same-week capacity. Prepare two bounded options for leadership review; do not execute either option.
+
+### Verified facts
+- 72 synthetic urgent requests versus 48 staffed appointment slots.
+- Access-pressure ratio: **{s.metrics['pressure_ratio']:.2f}×**; calculated capacity gap: **{s.metrics['capacity_gap']} requests**.
+- Demand increased **{s.metrics['waitlist_change_pct']:.1f}%** from the prior synthetic baseline of 54.
+- Evidence ownership and freshness cleared validation unless the visible risk state says otherwise.
+
+### Two bounded options
+1. **Protect review capacity:** leadership may evaluate a time-boxed administrative review block for the highest-pressure access categories.
+2. **Rebalance non-clinical capacity:** leadership may evaluate shifting same-week administrative review capacity across participating clinics.
+
+### Trade-offs
+- Option 1 concentrates attention quickly but may defer lower-priority administrative work.
+- Option 2 distributes pressure but depends on comparable skills, local constraints, and current roster evidence.
+- Neither option claims improved clinical outcomes; the workflow has no patient-level evidence.
+
+### Decision requested
+Should the manager prepare a simulation-only option assessment for leadership, or pause for refreshed evidence?
+
+### Assumptions to validate
+- The roster remains current at decision time.
+- The 72 requests and 48 slots use the same seven-day scope and metric definition.
+- Participating leaders agree on what constitutes protected administrative capacity.
+
+### Controls and stop conditions
+- Human approval is mandatory before packet generation.
+- Stop on stale, ownerless, conflicting, or unavailable evidence; policy timeout; or unapproved tool request.
+- No appointment changes, patient contact, staffing changes, or production actions occurred."""
+
+
 def _event(state: WorkflowState, node: str, status: str, detail: str, ms: int, cost: float = 0.0) -> None:
     state.statuses[node] = status
     state.trace.append({"node": node, "status": status, "detail": detail, "latency_ms": ms, "estimated_cost_usd": cost})
@@ -160,7 +196,7 @@ def run_workflow(fault: Fault = "none", approval: str = "pending") -> WorkflowSt
     if approval == "clarify":
         _event(s, "human_approval_interrupt", "escalated", "Manager requested evidence clarification. Packet generation remains locked.", 3); s.risk = "CLARIFICATION REQUIRED"; return s
     _event(s, "human_approval_interrupt", "approved", "Manager approved simulated packet preparation only.", 3)
-    s.packet = "Leadership review packet prepared: verified situation, two bounded options, assumptions, controls, and approval record. No operational action executed."
+    s.packet = deterministic_brief(s)
     _event(s, "generate_decision_packet", "passed", s.packet, 92, .0002); s.risk = "CONTROLLED / APPROVED"
     return s
 
