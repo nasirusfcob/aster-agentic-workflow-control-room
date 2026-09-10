@@ -1,7 +1,7 @@
 import io
 import pytest
 from pypdf import PdfReader
-from core import ROLE_DEFAULTS, access_allowed, build_blueprint, calculate_metrics, deterministic_brief, redact, role_config, run_workflow, workflow_map
+from core import ROLE_DEFAULTS, access_allowed, build_blueprint, calculate_metrics, deterministic_brief, execute_langgraph, redact, role_config, run_workflow, workflow_map
 from llm_service import PROVIDER_MODELS, manager_prompt
 
 def test_calculations():
@@ -42,3 +42,19 @@ def test_all_provider_catalogs_and_safe_prompt():
     assert all(len(models)>=5 for models in PROVIDER_MODELS.values())
     prompt=manager_prompt(run_workflow(approval="approve"))
     assert "API" not in prompt and "72 urgent requests" in prompt and "Do not change appointments" in prompt
+
+def test_manager_choices_change_business_outcome():
+    monitor=run_workflow(scenario={"demand":40,"slots":60,"prior":50})
+    equity=run_workflow(scenario={"demand":80,"slots":40,"prior":55,"priority":"Equity across clinics"})
+    assert "Monitor only" in monitor.recommendation
+    assert "equity check" in equity.recommendation
+
+def test_freshness_and_control_choices_change_graph_path():
+    stale=run_workflow(scenario={"roster_age":25})
+    weakened=run_workflow(scenario={"control_mode":"Allow best-effort continuation"})
+    assert stale.statuses["validate_evidence"]=="blocked"
+    assert weakened.risk=="BLOCKED — control baseline immutable"
+
+def test_real_langgraph_execution_returns_checkpointed_state():
+    s=execute_langgraph(scenario={"demand":75,"slots":50,"prior":60},thread_id="test-thread")
+    assert s.metrics["pressure_ratio"]==1.5 and s.statuses["human_approval_interrupt"]=="waiting"

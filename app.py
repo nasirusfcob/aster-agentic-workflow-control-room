@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os,time,uuid
 import streamlit as st
-from core import FAULT_LABELS,NODES,ROLE_DEFAULTS,access_allowed,build_blueprint,deterministic_brief,role_config,run_workflow,workflow_map
+from core import FAULT_LABELS,NODES,ROLE_DEFAULTS,access_allowed,build_blueprint,deterministic_brief,execute_langgraph,role_config,run_workflow,workflow_map
 from llm_service import PROVIDER_MODELS,call_llm,manager_prompt,test_connection
 
 st.set_page_config(page_title="Aster Agentic Workflow Control Room",page_icon="✦",layout="wide",initial_sidebar_state="expanded")
@@ -17,7 +17,7 @@ def secret(name):
     try:return st.secrets.get(name,"")
     except Exception:return ""
 def init():
-    defaults={"access":False,"page":"Situation Room","state":None,"fault":"none","profile":{"name":"","department":"Clinic Operations","role":"Clinic / Operations","success_kpi":"≥95% evidence completeness and 100% safe-stop compliance","next_action":"Confirm source owners and rehearse one fault test with the accountable leader."},"config":role_config("Clinic / Operations"),"api_key":"","provider":"OpenAI","model":"gpt-5.5","connection":None,"live_brief":"","last_active":time.time(),"thread_id":str(uuid.uuid4())}
+    defaults={"access":False,"page":"Situation Room","state":None,"fault":"none","scenario":{"demand":72,"slots":48,"prior":54,"roster_age":0,"claimed_confidence":86,"priority":"Fastest operational relief","control_mode":"Strict fail-closed"},"profile":{"name":"","department":"Clinic Operations","role":"Clinic / Operations","success_kpi":"≥95% evidence completeness and 100% safe-stop compliance","next_action":"Confirm source owners and rehearse one fault test with the accountable leader."},"config":role_config("Clinic / Operations"),"api_key":"","provider":"OpenAI","model":"gpt-5.5","connection":None,"live_brief":"","last_active":time.time(),"thread_id":str(uuid.uuid4())}
     for k,v in defaults.items():st.session_state.setdefault(k,v)
 init()
 if time.time()-st.session_state.last_active>1800:st.session_state.api_key="";st.session_state.connection=None
@@ -56,11 +56,16 @@ if page=="Situation Room":
     hero("08:40 AM • SYNTHETIC ACCESS SIGNAL","The pressure is real. The authority is bounded.","Urgent seven-day demand has moved from 54 to 72 requests while verified staffed capacity is 48 slots. Your task is not to ‘let AI decide.’ Your task is to determine whether a leadership option packet is reliable enough to prepare.")
     a,b,c,d=st.columns(4)
     for col,label,value,copy in [(a,"DEMAND","72","urgent requests"),(b,"VERIFIED CAPACITY","48","staffed slots"),(c,"PRESSURE","1.50×","requests per slot"),(d,"AUTHORITY","PREPARE","never execute")]:col.markdown(f'<div class="card"><div class="label">{label}</div><div class="kpi">{value}</div><p>{copy}</p></div>',unsafe_allow_html=True)
-    st.write("");st.markdown("### Your leadership challenge");st.markdown("A conventional assistant can draft plausible prose. A reliable agentic workflow must prove **what it saw, what it calculated, what control it applied, why it stopped, and who authorized continuation**.")
-    if st.button("Start the 8:40 incident →",type="primary",use_container_width=True):st.session_state.state=run_workflow();st.session_state.live_brief="";go("Live Agent Run")
+    st.write("");st.markdown("### Configure the operating reality")
+    x1,x2,x3=st.columns(3);st.session_state.scenario["demand"]=x1.slider("Urgent requests",30,110,st.session_state.scenario["demand"]);st.session_state.scenario["slots"]=x2.slider("Verified staffed slots",24,90,st.session_state.scenario["slots"]);st.session_state.scenario["prior"]=x3.slider("Prior-period requests",25,100,st.session_state.scenario["prior"])
+    x4,x5=st.columns(2);st.session_state.scenario["roster_age"]=x4.slider("Roster age (hours)",0,72,st.session_state.scenario["roster_age"]);st.session_state.scenario["claimed_confidence"]=x5.slider("Agent's claimed confidence",40,99,st.session_state.scenario["claimed_confidence"])
+    x6,x7=st.columns(2);st.session_state.scenario["priority"]=x6.selectbox("Leadership priority",["Fastest operational relief","Least disruption","Equity across clinics"],index=["Fastest operational relief","Least disruption","Equity across clinics"].index(st.session_state.scenario["priority"]));st.session_state.scenario["control_mode"]=x7.selectbox("Control posture",["Strict fail-closed","Allow best-effort continuation"],index=["Strict fail-closed","Allow best-effort continuation"].index(st.session_state.scenario["control_mode"]))
+    preview=run_workflow(scenario=st.session_state.scenario);p1,p2,p3=st.columns(3);p1.metric("Calculated pressure",f'{preview.metrics["pressure_ratio"]:.2f}×');p2.metric("Expected graph state",preview.risk);p3.metric("Calibrated confidence",f"{preview.confidence}%")
+    st.markdown("A conventional assistant can draft plausible prose. This workflow must prove **what it saw, what it calculated, what control it applied, why it stopped, and who authorized continuation**.")
+    if st.button("Run this configuration through LangGraph →",type="primary",use_container_width=True):st.session_state.state=execute_langgraph(scenario=st.session_state.scenario,thread_id=st.session_state.thread_id);st.session_state.live_brief="";go("Live Agent Run")
 elif page=="Live Agent Run":
     hero("LANGGRAPH EXECUTION • CHECKPOINTED SESSION","Follow the evidence—not the theater.","Each node owns a different contract. Inspect its input, operation, release condition, latency, and downstream consequence. The graph pauses at human approval.")
-    if st.session_state.state is None:st.session_state.state=run_workflow()
+    if st.session_state.state is None:st.session_state.state=execute_langgraph(scenario=st.session_state.scenario,thread_id=st.session_state.thread_id)
     s=st.session_state.state;left,right=st.columns([1.05,1.25])
     with left:
         selected=st.radio("Inspect node",[k for k,_ in NODES],format_func=lambda k:dict(NODES)[k],label_visibility="collapsed")
@@ -77,9 +82,9 @@ elif page=="Live Agent Run":
     st.divider();c1,c2=st.columns([1,2]);c1.metric("Current risk",s.risk);c2.markdown(f"**Bounded recommendation**  \n{s.recommendation}")
     if s.statuses["human_approval_interrupt"]=="waiting":
         st.warning("DECISION CHECKPOINT — authorize packet preparation only, never an intervention.");x,y,z=st.columns(3)
-        if x.button("Approve packet preparation",type="primary",use_container_width=True):st.session_state.state=run_workflow(s.fault,"approve");st.session_state.live_brief="";st.rerun()
-        if y.button("Request evidence clarification",use_container_width=True):st.session_state.state=run_workflow(s.fault,"clarify");st.rerun()
-        if z.button("Reject and close",use_container_width=True):st.session_state.state=run_workflow(s.fault,"reject");st.rerun()
+        if x.button("Approve packet preparation",type="primary",use_container_width=True):st.session_state.state=execute_langgraph(s.fault,"approve",st.session_state.scenario,st.session_state.thread_id);st.session_state.live_brief="";st.rerun()
+        if y.button("Request evidence clarification",use_container_width=True):st.session_state.state=execute_langgraph(s.fault,"clarify",st.session_state.scenario,st.session_state.thread_id);st.rerun()
+        if z.button("Reject and close",use_container_width=True):st.session_state.state=execute_langgraph(s.fault,"reject",st.session_state.scenario,st.session_state.thread_id);st.rerun()
     if s.packet:
         st.subheader("Decision-grade leadership brief")
         if mode=="Live BYOK" and st.session_state.connection and st.session_state.connection.ok:
@@ -89,14 +94,14 @@ elif page=="Live Agent Run":
         st.markdown(st.session_state.live_brief or deterministic_brief(s))
 elif page=="Evidence & Math":
     hero("EVIDENCE LEDGER • REPRODUCIBLE TOOLS","Every number has a lineage.","Challenge the source, reproduce the math, and inspect the policy result without asking a model for private reasoning.")
-    s=st.session_state.state or run_workflow();st.dataframe(s.evidence,use_container_width=True,hide_index=True);a,b,c=st.columns(3);a.metric("Access pressure",f'{s.metrics["pressure_ratio"]:.2f}×',"72 ÷ 48");b.metric("Demand movement",f'{s.metrics["waitlist_change_pct"]:.1f}%','(72 − 54) ÷ 54');c.metric("Capacity gap",s.metrics["capacity_gap"],"max(72 − 48, 0)")
+    s=st.session_state.state or execute_langgraph(scenario=st.session_state.scenario,thread_id=st.session_state.thread_id);sc=s.scenario or st.session_state.scenario;st.dataframe(s.evidence,use_container_width=True,hide_index=True);a,b,c=st.columns(3);a.metric("Access pressure",f'{s.metrics["pressure_ratio"]:.2f}×',f'{sc["demand"]} ÷ {sc["slots"]}');b.metric("Demand movement",f'{s.metrics["waitlist_change_pct"]:.1f}%',f'vs {sc["prior"]} prior');c.metric("Capacity gap",s.metrics["capacity_gap"],f'max({sc["demand"]} − {sc["slots"]}, 0)')
     t1,t2=st.tabs(["Execution trace","Exact LLM context"]);t1.dataframe(s.trace,use_container_width=True,hide_index=True);t2.code(manager_prompt(s),language="text");t2.caption("Keys, identity, and hidden reasoning are excluded. Only verified synthetic state is released.")
 elif page=="Red-Team Lab":
     hero("CONTROLLED FAILURE • SEVEN DISTINCT PATHS","Reliability becomes visible when something breaks.","Predict the stop point, inject a fault, and compare your expectation with the actual control response.")
     outcomes={"stale_roster":"Evidence Validation blocks → request current roster","conflicting_reports":"Supervisor escalates → reconcile 72 vs 51","missing_owner":"Evidence Validation blocks → assign owner","unapproved_tool":"Policy Agent denies tool → record attempt","risk_timeout":"Policy Agent fails closed → no continuation","high_confidence":"Supervisor recalibrates 98% → 58%","bypass_approval":"Human gate rejects bypass → approval stays mandatory","none":"Baseline pauses at human review"}
     fault=st.selectbox("Fault to inject",list(FAULT_LABELS),format_func=lambda x:FAULT_LABELS[x],index=list(FAULT_LABELS).index(st.session_state.fault));st.markdown(f'<div class="card"><div class="label">EXPECTED CONTROL RESPONSE</div><h3>{outcomes[fault]}</h3></div>',unsafe_allow_html=True)
-    if st.button("Run adversarial test",type="primary",use_container_width=True):st.session_state.fault=fault;st.session_state.state=run_workflow(fault);st.session_state.live_brief="";st.rerun()
-    s=st.session_state.state or run_workflow(fault);st.markdown(f"## Result: `{s.risk}`")
+    if st.button("Run adversarial test",type="primary",use_container_width=True):st.session_state.fault=fault;st.session_state.state=execute_langgraph(fault,"pending",st.session_state.scenario,st.session_state.thread_id);st.session_state.live_brief="";st.rerun()
+    s=st.session_state.state or execute_langgraph(fault,"pending",st.session_state.scenario,st.session_state.thread_id);st.markdown(f"## Result: `{s.risk}`")
     for e in s.trace:st.markdown(f'<div class="node {e["status"]}"><span class="status">{e["status"]}</span> · <b>{dict(NODES)[e["node"]]}</b><br/><span class="fine">{e["detail"]}</span></div>',unsafe_allow_html=True)
     if not s.packet:st.markdown('<div class="danger"><b>No packet. No tool call. No hidden continuation.</b><br/>The absence of output is correct when a required control fails.</div>',unsafe_allow_html=True)
 elif page=="Role Design Studio":

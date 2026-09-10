@@ -9,6 +9,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
+from langsmith import traceable
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -37,6 +38,7 @@ class AgentGraphState(TypedDict, total=False):
     approval: str
     workflow: WorkflowState
     current_node: str
+    scenario: dict[str, Any]
 
 
 def build_langgraph():
@@ -48,7 +50,7 @@ def build_langgraph():
     graph = StateGraph(AgentGraphState)
 
     def intake(state: AgentGraphState):
-        return {"workflow": run_workflow(state.get("fault", "none"), state.get("approval", "pending")), "current_node": "intake_scope"}
+        return {"workflow": run_workflow(state.get("fault", "none"), state.get("approval", "pending"), state.get("scenario")), "current_node": "intake_scope"}
 
     def mark(name: str):
         def node(state: AgentGraphState): return {"current_node": name}
@@ -59,7 +61,7 @@ def build_langgraph():
     graph.add_edge(START, "intake_scope")
     for (a, _), (b, _) in zip(NODES, NODES[1:]): graph.add_edge(a, b)
     graph.add_edge("generate_decision_packet", END)
-    return graph.compile(checkpointer=MemorySaver(), interrupt_before=["generate_decision_packet"])
+    return graph.compile(checkpointer=MemorySaver())
 
 FAULT_LABELS = {
     "none": "No fault — verified baseline",
@@ -116,19 +118,22 @@ class WorkflowState:
     risk: str = "Awaiting review"
     confidence: int = 0
     packet: str = ""
+    scenario: dict[str, Any] = field(default_factory=dict)
 
 
 def deterministic_brief(s: WorkflowState) -> str:
     """Decision-grade fallback used when no model is configured or a call fails."""
     if not s.metrics:
         return "### Executive signal\nNo recommendation can be prepared because required evidence did not clear validation.\n\n### Controls and stop conditions\nThe workflow stopped visibly. Resolve the named evidence or policy failure before rerun. No action was taken."
+    demand=int(s.scenario.get("demand",72));slots=int(s.scenario.get("slots",48));prior=int(s.scenario.get("prior",54))
+    signal="Urgent access pressure exceeds available same-week capacity." if s.metrics["pressure_ratio"]>=1 else "Available same-week capacity exceeds the current urgent-access signal."
     return f"""### Executive signal
-Urgent access pressure is materially above available same-week capacity. Prepare two bounded options for leadership review; do not execute either option.
+{signal} {s.recommendation}
 
 ### Verified facts
-- 72 synthetic urgent requests versus 48 staffed appointment slots.
+- {demand} synthetic urgent requests versus {slots} staffed appointment slots.
 - Access-pressure ratio: **{s.metrics['pressure_ratio']:.2f}×**; calculated capacity gap: **{s.metrics['capacity_gap']} requests**.
-- Demand increased **{s.metrics['waitlist_change_pct']:.1f}%** from the prior synthetic baseline of 54.
+- Demand changed **{s.metrics['waitlist_change_pct']:.1f}%** from the prior synthetic baseline of {prior}.
 - Evidence ownership and freshness cleared validation unless the visible risk state says otherwise.
 
 ### Two bounded options
@@ -145,7 +150,7 @@ Should the manager prepare a simulation-only option assessment for leadership, o
 
 ### Assumptions to validate
 - The roster remains current at decision time.
-- The 72 requests and 48 slots use the same seven-day scope and metric definition.
+- The {demand} requests and {slots} slots use the same seven-day scope and metric definition.
 - Participating leaders agree on what constitutes protected administrative capacity.
 
 ### Controls and stop conditions
@@ -159,19 +164,25 @@ def _event(state: WorkflowState, node: str, status: str, detail: str, ms: int, c
     state.trace.append({"node": node, "status": status, "detail": detail, "latency_ms": ms, "estimated_cost_usd": cost})
 
 
-def run_workflow(fault: Fault = "none", approval: str = "pending") -> WorkflowState:
-    s = WorkflowState(fault=fault, approval=approval)
+@traceable(name="aster_agentic_workflow", tags=["synthetic", "manager-training"])
+def run_workflow(fault: Fault = "none", approval: str = "pending", scenario: dict[str, Any] | None = None) -> WorkflowState:
+    scenario=scenario or {}
+    demand=int(scenario.get("demand",72));slots=int(scenario.get("slots",48));prior=int(scenario.get("prior",54))
+    roster_age=int(scenario.get("roster_age",0));priority=scenario.get("priority","Fastest operational relief")
+    claimed=int(scenario.get("claimed_confidence",86));control=scenario.get("control_mode","Strict fail-closed")
+    s = WorkflowState(fault=fault, approval=approval, scenario=dict(scenario))
     _event(s, "intake_scope", "passed", "Scope bounded to preparation for leadership review; actions prohibited.", 82, .0001)
     s.evidence = [
-        {"source": "Synthetic access-demand report", "value": "72 urgent requests", "owner": "Access analytics", "freshness": "08:35 today", "status": "verified"},
-        {"source": "Synthetic staffing roster", "value": "48 staffed slots", "owner": "Clinic operations", "freshness": "08:30 today", "status": "verified"},
+        {"source": "Synthetic access-demand report", "value": f"{demand} urgent requests", "owner": "Access analytics", "freshness": "08:35 today", "status": "verified"},
+        {"source": "Synthetic staffing roster", "value": f"{slots} staffed slots", "owner": "Clinic operations", "freshness": f"{roster_age} hours old", "status": "verified" if roster_age<=24 else "stale"},
     ]
     if fault == "stale_roster": s.evidence[1].update(freshness="72 hours old", status="stale")
     if fault == "conflicting_reports": s.evidence.append({"source": "Synthetic secondary demand report", "value": "51 urgent requests", "owner": "Planning", "freshness": "08:36 today", "status": "conflict"})
     if fault == "missing_owner": s.evidence[0].update(owner="Missing", status="incomplete")
     _event(s, "retrieve_evidence", "passed", f"Retrieved {len(s.evidence)} approved synthetic sources.", 146, .0002)
-    s.metrics = calculate_metrics(72, 48, 54)
-    _event(s, "calculate_decision_metrics", "passed", "Deterministic calculation: 72 ÷ 48 = 1.50 pressure ratio; demand is up 33.3%.", 4)
+    s.metrics = calculate_metrics(demand, slots, prior)
+    _event(s, "calculate_decision_metrics", "passed", f"Deterministic calculation: {demand} ÷ {slots} = {s.metrics['pressure_ratio']:.2f}; demand changed {s.metrics['waitlist_change_pct']:.1f}%.", 4)
+    if roster_age>24 and fault=="none":fault="stale_roster";s.fault=fault
     if fault in ("stale_roster", "missing_owner"):
         reason = "Roster is stale; obtain a current approved roster." if fault == "stale_roster" else "Evidence owner is missing; manager must request ownership."
         _event(s, "validate_evidence", "blocked", reason, 31); s.risk = "BLOCKED — evidence incomplete"; return s
@@ -182,11 +193,17 @@ def run_workflow(fault: Fault = "none", approval: str = "pending") -> WorkflowSt
         _event(s, "risk_policy_review", "blocked", "Risk agent timed out. Fail-safe stop; no hidden continuation.", 2000); s.risk = "BLOCKED — control unavailable"; return s
     _event(s, "risk_policy_review", "passed", "No patient contact, schedule change, or staffing action permitted.", 73, .0001)
     if fault == "conflicting_reports":
-        _event(s, "supervisor_quality_gate", "escalated", "Demand reports conflict: 72 vs 51. Reconcile before recommendation.", 55); s.risk = "ESCALATED — evidence conflict"; return s
-    s.confidence = 58 if fault == "high_confidence" else 86
-    quality = "Claimed confidence reduced from 98% to 58% because evidence does not support it." if fault == "high_confidence" else "Evidence, calculations, and bounded options are internally consistent."
+        _event(s, "supervisor_quality_gate", "escalated", f"Demand reports conflict: {demand} vs {max(demand-21,0)}. Reconcile before recommendation.", 55); s.risk = "ESCALATED — evidence conflict"; return s
+    supported=min(92,max(45,70+(10 if roster_age<=4 else 0)+6))
+    s.confidence=58 if fault=="high_confidence" else min(claimed,supported)
+    quality=f"Claimed confidence recalibrated from {claimed}% to {s.confidence}% using evidence completeness and freshness." if claimed>s.confidence or fault=="high_confidence" else "Evidence, calculations, and bounded options are internally consistent."
     _event(s, "supervisor_quality_gate", "passed", quality, 61, .0001)
-    s.recommendation = "Prepare Option A: add protected review capacity; Option B: rebalance same-week administrative capacity. Leadership decides; no action is taken."
+    if s.metrics["pressure_ratio"]<1:s.recommendation="Monitor only: verified capacity exceeds demand; prepare no intervention unless a material local constraint is documented."
+    elif priority=="Least disruption":s.recommendation="Lead with targeted administrative rebalance; retain protected review capacity as contingency. Leadership decides; no action is taken."
+    elif priority=="Equity across clinics":s.recommendation="Lead with cross-clinic review plus an equity check; retain protected review capacity as fallback. Leadership decides; no action is taken."
+    else:s.recommendation="Lead with time-boxed protected review capacity; compare with administrative rebalance. Leadership decides; no action is taken."
+    if control!="Strict fail-closed":
+        _event(s,"human_approval_interrupt","blocked","Attempt to weaken mandatory fail-closed controls was rejected by policy.",2);s.risk="BLOCKED — control baseline immutable";return s
     if fault == "bypass_approval":
         _event(s, "human_approval_interrupt", "blocked", "Bypass instruction rejected. Manager approval remains mandatory.", 7); s.risk = "BLOCKED — approval required"; return s
     if approval == "pending":
@@ -199,6 +216,12 @@ def run_workflow(fault: Fault = "none", approval: str = "pending") -> WorkflowSt
     s.packet = deterministic_brief(s)
     _event(s, "generate_decision_packet", "passed", s.packet, 92, .0002); s.risk = "CONTROLLED / APPROVED"
     return s
+
+
+def execute_langgraph(fault: Fault="none", approval: str="pending", scenario: dict[str,Any] | None=None, thread_id: str="workshop") -> WorkflowState:
+    """Execute the real typed StateGraph with an active-session checkpoint."""
+    result=build_langgraph().invoke({"fault":fault,"approval":approval,"scenario":scenario or {}},config={"configurable":{"thread_id":thread_id}})
+    return result["workflow"]
 
 
 def role_config(role: str) -> dict[str, str]:
